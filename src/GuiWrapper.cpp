@@ -253,7 +253,7 @@ void GuiWrapper::processRequestedMap(const rtabmap_ros::MapData & map)
 	QMetaObject::invokeMethod(mainWindow_, "processRtabmapEvent3DMap", Q_ARG(rtabmap::RtabmapEvent3DMap, e));
 }
 
-bool GuiWrapper::handleEvent(UEvent * anEvent)
+void GuiWrapper::handleEvent(UEvent * anEvent)
 {
 	if(anEvent->getClassName().compare("ParamEvent") == 0)
 	{
@@ -302,10 +302,7 @@ bool GuiWrapper::handleEvent(UEvent * anEvent)
 			if(!cameraNodeName_.empty())
 			{
 				std::string str = uFormat("rosrun dynamic_reconfigure dynparam set %s pause true", cameraNodeName_.c_str());
-				if(system(str.c_str()) !=0)
-				{
-					ROS_ERROR("Command \"%s\" returned non zero value.", str.c_str());
-				}
+				system(str.c_str());
 			}
 
 			// Pause visual_odometry
@@ -332,10 +329,7 @@ bool GuiWrapper::handleEvent(UEvent * anEvent)
 			if(!cameraNodeName_.empty())
 			{
 				std::string str = uFormat("rosrun dynamic_reconfigure dynparam set %s pause false", cameraNodeName_.c_str());
-				if(system(str.c_str()) !=0)
-				{
-					ROS_ERROR("Command \"%s\" returned non zero value.", str.c_str());
-				}
+				system(str.c_str());
 			}
 		}
 		else if(cmd == rtabmap::RtabmapEventCmd::kCmdTriggerNewMap)
@@ -419,7 +413,6 @@ bool GuiWrapper::handleEvent(UEvent * anEvent)
 			ROS_ERROR("Can't call \"reset_odom\" service, (will only work with rtabmap/visual_odometry node.)");
 		}
 	}
-	return false;
 }
 
 void GuiWrapper::commonDepthCallback(
@@ -570,7 +563,6 @@ void GuiWrapper::commonDepthCallback(
 		return;
 	}
 
-	info.covariance = covariance;
 	rtabmap::OdometryEvent odomEvent(
 		rtabmap::SensorData(
 				scan,
@@ -584,6 +576,7 @@ void GuiWrapper::commonDepthCallback(
 				odomHeader.seq,
 				rtabmap_ros::timestampFromROS(odomHeader.stamp)),
 		odomMsg.get()?rtabmap_ros::transformFromPoseMsg(odomMsg->pose.pose):odomT,
+		covariance,
 		info);
 
 	QMetaObject::invokeMethod(mainWindow_, "processOdometry", Q_ARG(rtabmap::OdometryEvent, odomEvent), Q_ARG(bool, ignoreData));
@@ -726,7 +719,6 @@ void GuiWrapper::commonStereoCallback(
 		return;
 	}
 
-	info.covariance = covariance;
 	rtabmap::OdometryEvent odomEvent(
 		rtabmap::SensorData(
 				scan,
@@ -740,6 +732,7 @@ void GuiWrapper::commonStereoCallback(
 				odomHeader.seq,
 				rtabmap_ros::timestampFromROS(odomHeader.stamp)),
 		odomMsg.get()?rtabmap_ros::transformFromPoseMsg(odomMsg->pose.pose):odomT,
+		covariance,
 		info);
 
 	QMetaObject::invokeMethod(mainWindow_, "processOdometry", Q_ARG(rtabmap::OdometryEvent, odomEvent), Q_ARG(bool, ignoreData));

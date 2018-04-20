@@ -163,11 +163,9 @@ int main(int argc, char** argv)
 	tf2_ros::TransformBroadcaster tfBroadcaster;
 
 	UTimer timer;
-	rtabmap::CameraInfo cameraInfo;
-	rtabmap::SensorData data = reader.takeImage(&cameraInfo);
-	rtabmap::OdometryInfo odomInfo;
-	odomInfo.covariance = cameraInfo.odomCovariance;
-	rtabmap::OdometryEvent odom(data, cameraInfo.odomPose, odomInfo);
+	rtabmap::CameraInfo info;
+	rtabmap::SensorData data = reader.takeImage(&info);
+	rtabmap::OdometryEvent odom(data, info.odomPose, info.odomCovariance);
 	double acquisitionTime = timer.ticks();
 	while(ros::ok() && odom.data().id())
 	{
@@ -492,10 +490,9 @@ int main(int argc, char** argv)
 		}
 
 		timer.restart();
-		cameraInfo = rtabmap::CameraInfo();
-		data = reader.takeImage(&cameraInfo);
-		odomInfo.covariance = cameraInfo.odomCovariance;
-		odom = rtabmap::OdometryEvent(data, cameraInfo.odomPose, odomInfo);
+		info = rtabmap::CameraInfo();
+		data = reader.takeImage(&info);
+		odom = rtabmap::OdometryEvent(data, info.odomPose, info.odomCovariance);
 		acquisitionTime = timer.ticks();
 	}
 

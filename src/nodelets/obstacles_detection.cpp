@@ -50,8 +50,7 @@ class ObstaclesDetection : public nodelet::Nodelet
 public:
 	ObstaclesDetection() :
 		frameId_("base_link"),
-		waitForTransform_(false),
-		mapFrameProjection_(rtabmap::Parameters::defaultGridMapFrameProjection())
+		waitForTransform_(false)
 	{}
 
 	virtual ~ObstaclesDetection()
@@ -195,8 +194,7 @@ private:
 		parameterMoved(pnh, "normal_k", rtabmap::Parameters::kGridNormalK(), parameters);
 
 		UASSERT(uContains(parameters, rtabmap::Parameters::kGridMapFrameProjection()));
-		mapFrameProjection_ = uStr2Bool(parameters.at(rtabmap::Parameters::kGridMapFrameProjection()));
-		if(mapFrameProjection_ && mapFrameId_.empty())
+		if(uStr2Bool(parameters.at(rtabmap::Parameters::kGridMapFrameProjection())) && mapFrameId_.empty())
 		{
 			NODELET_ERROR("obstacles_detection: Parameter \"%s\" is true but map_frame_id is not set!", rtabmap::Parameters::kGridMapFrameProjection().c_str());
 		}
@@ -222,7 +220,7 @@ private:
 			return;
 		}
 
-		rtabmap::Transform localTransform = rtabmap::Transform::getIdentity();
+		rtabmap::Transform localTransform;
 		try
 		{
 			if(waitForTransform_)
@@ -328,27 +326,17 @@ private:
 					obstaclesCloudWithoutFlatSurfaces->resize(oi);
 				}
 
-				if(!localTransform.isIdentity() || !pose.isIdentity())
+				if(!localTransform.isIdentity())
 				{
-					//transform back in topic frame for 3d clouds and base frame for 2d clouds
-
-					float roll, pitch, yaw;
-					pose.getEulerAngles(roll, pitch, yaw);
-					rtabmap::Transform t = rtabmap::Transform(0,0, mapFrameProjection_?pose.z():0, roll, pitch, 0);
-
-					if(obstaclesCloudWithoutFlatSurfaces->size() && !pose.isIdentity())
-					{
-						obstaclesCloudWithoutFlatSurfaces = rtabmap::util3d::transformPointCloud(obstaclesCloudWithoutFlatSurfaces, t.inverse());
-					}
-
-					t = (t*localTransform).inverse();
+					//transform back in topic frame
+					rtabmap::Transform localTransformInv = localTransform.inverse();
 					if(groundCloud->size())
 					{
-						groundCloud = rtabmap::util3d::transformPointCloud(groundCloud, t);
+						groundCloud = rtabmap::util3d::transformPointCloud(groundCloud, localTransformInv);
 					}
 					if(obstaclesCloud->size())
 					{
-						obstaclesCloud = rtabmap::util3d::transformPointCloud(obstaclesCloud, t);
+						obstaclesCloud = rtabmap::util3d::transformPointCloud(obstaclesCloud, localTransformInv);
 					}
 				}
 			}
@@ -394,7 +382,6 @@ private:
 	bool waitForTransform_;
 
 	rtabmap::OccupancyGrid grid_;
-	bool mapFrameProjection_;
 
 	tf::TransformListener tfListener_;
 

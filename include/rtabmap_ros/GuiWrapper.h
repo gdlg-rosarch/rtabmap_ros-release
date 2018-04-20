@@ -60,7 +60,7 @@ public:
 	virtual ~GuiWrapper();
 
 protected:
-	virtual bool handleEvent(UEvent * anEvent);
+	virtual void handleEvent(UEvent * anEvent);
 
 private:
 	void infoMapCallback(const rtabmap_ros::InfoConstPtr & infoMsg, const rtabmap_ros::MapDataConstPtr & mapMsg);

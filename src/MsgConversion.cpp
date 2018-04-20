@@ -69,13 +69,6 @@ void transformToGeometryMsg(const rtabmap::Transform & transform, geometry_msgs:
 	if(!transform.isNull())
 	{
 		tf::transformEigenToMsg(transform.toEigen3d(), msg);
-
-		// make sure the quaternion is normalized
-		long double recipNorm = 1.0 / sqrt(msg.rotation.x * msg.rotation.x + msg.rotation.y * msg.rotation.y + msg.rotation.z * msg.rotation.z + msg.rotation.w * msg.rotation.w);
-		msg.rotation.x *= recipNorm;
-		msg.rotation.y *= recipNorm;
-		msg.rotation.z *= recipNorm;
-		msg.rotation.w *= recipNorm;
 	}
 	else
 	{
@@ -301,8 +294,7 @@ void infoToROS(const rtabmap::Statistics & stats, rtabmap_ros::Info & info)
 
 rtabmap::Link linkFromROS(const rtabmap_ros::Link & msg)
 {
-	cv::Mat information = cv::Mat(6,6,CV_64FC1, (void*)msg.information.data()).clone();
-	return rtabmap::Link(msg.fromId, msg.toId, (rtabmap::Link::Type)msg.type, transformFromGeometryMsg(msg.transform), information);
+	return rtabmap::Link(msg.fromId, msg.toId, (rtabmap::Link::Type)msg.type, transformFromGeometryMsg(msg.transform), msg.rotVariance, msg.transVariance);
 }
 
 void linkToROS(const rtabmap::Link & link, rtabmap_ros::Link & msg)
@@ -310,10 +302,8 @@ void linkToROS(const rtabmap::Link & link, rtabmap_ros::Link & msg)
 	msg.fromId = link.from();
 	msg.toId = link.to();
 	msg.type = link.type();
-	if(link.infMatrix().type() == CV_64FC1 && link.infMatrix().cols == 6 && link.infMatrix().rows == 6)
-	{
-		memcpy(msg.information.data(), link.infMatrix().data, 36*sizeof(double));
-	}
+	msg.rotVariance = link.rotVariance();
+	msg.transVariance = link.transVariance();
 	transformToGeometryMsg(link.transform(), msg.transform);
 }
 
@@ -884,18 +874,13 @@ rtabmap::OdometryInfo odomInfoFromROS(const rtabmap_ros::OdomInfo & msg)
 	rtabmap::OdometryInfo info;
 	info.lost = msg.lost;
 	info.matches = msg.matches;
-	info.inliers = msg.inliers;
-	info.icpInliersRatio = msg.icpInliersRatio;
-	info.covariance = cv::Mat(6,6,CV_64FC1, (void*)msg.covariance.data()).clone();
 	info.features = msg.features;
+	info.inliers = msg.inliers;
 	info.localMapSize = msg.localMapSize;
 	info.localScanMapSize = msg.localScanMapSize;
-	info.localKeyFrames = msg.localKeyFrames;
-	info.localBundleOutliers = msg.localBundleOutliers;
-	info.localBundleConstraints = msg.localBundleConstraints;
-	info.localBundleTime = msg.localBundleTime;
-	info.keyFrameAdded = msg.keyFrameAdded;
 	info.timeEstimation = msg.timeEstimation;
+	info.varianceLin = msg.varianceLin;
+	info.varianceAng = msg.varianceAng;
 	info.timeParticleFiltering =  msg.timeParticleFiltering;
 	info.stamp = msg.stamp;
 	info.interval = msg.interval;
@@ -934,21 +919,13 @@ void odomInfoToROS(const rtabmap::OdometryInfo & info, rtabmap_ros::OdomInfo & m
 {
 	msg.lost = info.lost;
 	msg.matches = info.matches;
-	msg.inliers = info.inliers;
-	msg.icpInliersRatio = info.icpInliersRatio;
-	if(info.covariance.type() == CV_64FC1 && info.covariance.cols == 6 && info.covariance.rows == 6)
-	{
-		memcpy(msg.covariance.data(), info.covariance.data, 36*sizeof(double));
-	}
 	msg.features = info.features;
+	msg.inliers = info.inliers;
 	msg.localMapSize = info.localMapSize;
 	msg.localScanMapSize = info.localScanMapSize;
-	msg.localKeyFrames = info.localKeyFrames;
-	msg.localBundleOutliers = info.localBundleOutliers;
-	msg.localBundleConstraints = info.localBundleConstraints;
-	msg.localBundleTime = info.localBundleTime;
-	msg.keyFrameAdded = info.keyFrameAdded;
 	msg.timeEstimation = info.timeEstimation;
+	msg.varianceLin = info.varianceLin;
+	msg.varianceAng = info.varianceAng;
 	msg.timeParticleFiltering =  info.timeParticleFiltering;
 	msg.stamp = info.stamp;
 	msg.interval = info.interval;
@@ -1050,7 +1027,7 @@ rtabmap::Transform getTransform(
 	}
 	catch(tf::TransformException & ex)
 	{
-		ROS_WARN("(getting transform %s -> %s) %s", fromFrameId.c_str(), toFrameId.c_str(), ex.what());
+		ROS_WARN("%s",ex.what());
 	}
 	return transform;
 }
@@ -1087,7 +1064,7 @@ rtabmap::Transform getTransform(
 	}
 	catch(tf::TransformException & ex)
 	{
-		ROS_WARN("(getting transform movement of %s according to fixed %s) %s", sourceTargetFrame.c_str(), fixedFrame.c_str(), ex.what());
+		ROS_WARN("%s",ex.what());
 	}
 	return transform;
 }
@@ -1106,22 +1083,11 @@ bool convertRGBDMsgs(
 		double waitForTransform)
 {
 	UASSERT(imageMsgs.size()>0 &&
-			(imageMsgs.size() == depthMsgs.size() || depthMsgs.empty()) &&
+			imageMsgs.size() == depthMsgs.size() &&
 			imageMsgs.size() == cameraInfoMsgs.size());
 
 	int imageWidth = imageMsgs[0]->image.cols;
 	int imageHeight = imageMsgs[0]->image.rows;
-	int depthWidth = depthMsgs.size()?depthMsgs[0]->image.cols:0;
-	int depthHeight = depthMsgs.size()?depthMsgs[0]->image.rows:0;
-
-	if(depthMsgs.size())
-	{
-		UASSERT_MSG(
-				imageWidth % depthWidth == 0 && imageHeight % depthHeight == 0 &&
-				imageWidth/depthWidth == imageHeight/depthHeight,
-				uFormat("rgb=%dx%d depth=%dx%d", imageWidth, imageHeight, depthWidth, depthHeight).c_str());
-	}
-
 	int cameraCount = imageMsgs.size();
 	for(unsigned int i=0; i<imageMsgs.size(); ++i)
 	{
@@ -1129,23 +1095,12 @@ bool convertRGBDMsgs(
 			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::MONO8) ==0 ||
 			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::MONO16) ==0 ||
 			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::BGR8) == 0 ||
-			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::RGB8) == 0 ||
-			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::BGRA8) == 0 ||
-			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::RGBA8) == 0 ||
-			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::BAYER_GRBG8) == 0))
+			 imageMsgs[i]->encoding.compare(sensor_msgs::image_encodings::RGB8) == 0) ||
+			!(depthMsgs[i]->encoding.compare(sensor_msgs::image_encodings::TYPE_16UC1) == 0 ||
+			 depthMsgs[i]->encoding.compare(sensor_msgs::image_encodings::TYPE_32FC1) == 0 ||
+			 depthMsgs[i]->encoding.compare(sensor_msgs::image_encodings::MONO16) == 0))
 		{
-
-			ROS_ERROR("Input rgb type must be image=mono8,mono16,rgb8,bgr8,bgra8,rgba8. Current rgb=%s",
-					imageMsgs[i]->encoding.c_str());
-			return false;
-		}
-		 if(depthMsgs.size() &&
-			 !(depthMsgs[i]->encoding.compare(sensor_msgs::image_encodings::TYPE_16UC1) == 0 ||
-			   depthMsgs[i]->encoding.compare(sensor_msgs::image_encodings::TYPE_32FC1) == 0 ||
-			   depthMsgs[i]->encoding.compare(sensor_msgs::image_encodings::MONO16) == 0))
-		{
-			ROS_ERROR("Input depth type must be image_depth=32FC1,16UC1,mono16. Current depth=%s",
-					depthMsgs[i]->encoding.c_str());
+			ROS_ERROR("Input type must be image=mono8,mono16,rgb8,bgr8 and image_depth=32FC1,16UC1,mono16");
 			return false;
 		}
 
@@ -1155,47 +1110,37 @@ bool convertRGBDMsgs(
 						imageMsgs[i]->image.cols,
 						imageHeight,
 						imageMsgs[i]->image.rows).c_str());
-		ros::Time stamp;
-		if(depthMsgs.size())
-		{
-			UASSERT_MSG(depthMsgs[i]->image.cols == depthWidth && depthMsgs[i]->image.rows == depthHeight,
-					uFormat("depthWidth=%d vs %d imageHeight=%d vs %d",
-							depthWidth,
-							depthMsgs[i]->image.cols,
-							depthHeight,
-							depthMsgs[i]->image.rows).c_str());
-			stamp = depthMsgs[i]->header.stamp;
-		}
-		else
-		{
-			stamp = imageMsgs[i]->header.stamp;
-		}
+		UASSERT_MSG(depthMsgs[i]->image.cols == imageWidth && depthMsgs[i]->image.rows == imageHeight,
+				uFormat("imageWidth=%d vs %d imageHeight=%d vs %d",
+						imageWidth,
+						depthMsgs[i]->image.cols,
+						imageHeight,
+						depthMsgs[i]->image.rows).c_str());
 
-		// use depth's stamp so that geometry is sync to odom, use rgb frame as we assume depth is registered (normally depth msg should have same frame than rgb)
-		rtabmap::Transform localTransform = rtabmap_ros::getTransform(frameId, imageMsgs[i]->header.frame_id, stamp, listener, waitForTransform);
+		rtabmap::Transform localTransform = rtabmap_ros::getTransform(frameId, depthMsgs[i]->header.frame_id, depthMsgs[i]->header.stamp, listener, waitForTransform);
 		if(localTransform.isNull())
 		{
-			ROS_ERROR("TF of received image %d at time %fs is not set!", i, stamp.toSec());
+			ROS_ERROR("TF of received depth image %d at time %fs is not set!", i, depthMsgs[i]->header.stamp.toSec());
 			return false;
 		}
 		// sync with odometry stamp
-		if(!odomFrameId.empty() && odomStamp != stamp)
+		if(!odomFrameId.empty() && odomStamp != depthMsgs[i]->header.stamp)
 		{
 			rtabmap::Transform sensorT = getTransform(
 					frameId,
 					odomFrameId,
 					odomStamp,
-					stamp,
+					depthMsgs[i]->header.stamp,
 					listener,
 					waitForTransform);
 			if(sensorT.isNull())
 			{
 				ROS_WARN("Could not get odometry value for depth image stamp (%fs). Latest odometry "
-						"stamp is %fs. The depth image pose will not be synchronized with odometry.", stamp.toSec(), odomStamp.toSec());
+						"stamp is %fs. The depth image pose will not be synchronized with odometry.", depthMsgs[i]->header.stamp.toSec(), odomStamp.toSec());
 			}
 			else
 			{
-				//ROS_WARN("RGBD correction = %s (time diff=%fs)", sensorT.prettyPrint().c_str(), fabs(stamp.toSec()-odomStamp.toSec()));
+				//ROS_WARN("RGBD correction = %s (time diff=%fs)", sensorT.prettyPrint().c_str(), fabs(depthMsgs[i]->header.stamp.toSec()-odomStamp.toSec()));
 				localTransform = sensorT * localTransform;
 			}
 		}
@@ -1215,12 +1160,19 @@ bool convertRGBDMsgs(
 		{
 			ptrImage = cv_bridge::cvtColor(imageMsgs[i], "bgr8");
 		}
+		cv_bridge::CvImageConstPtr ptrDepth = depthMsgs[i];
+		cv::Mat subDepth = ptrDepth->image;
 
 		// initialize
 		if(rgb.empty())
 		{
 			rgb = cv::Mat(imageHeight, imageWidth*cameraCount, ptrImage->image.type());
 		}
+		if(depth.empty())
+		{
+			depth = cv::Mat(imageHeight, imageWidth*cameraCount, subDepth.type());
+		}
+
 		if(ptrImage->image.type() == rgb.type())
 		{
 			ptrImage->image.copyTo(cv::Mat(rgb, cv::Rect(i*imageWidth, 0, imageWidth, imageHeight)));
@@ -1231,25 +1183,14 @@ bool convertRGBDMsgs(
 			return false;
 		}
 
-		if(depthMsgs.size())
+		if(subDepth.type() == depth.type())
 		{
-			cv_bridge::CvImageConstPtr ptrDepth = depthMsgs[i];
-			cv::Mat subDepth = ptrDepth->image;
-
-			if(depth.empty())
-			{
-				depth = cv::Mat(depthHeight, depthWidth*cameraCount, subDepth.type());
-			}
-
-			if(subDepth.type() == depth.type())
-			{
-				subDepth.copyTo(cv::Mat(depth, cv::Rect(i*depthWidth, 0, depthWidth, depthHeight)));
-			}
-			else
-			{
-				ROS_ERROR("Some Depth images are not the same type!");
-				return false;
-			}
+			subDepth.copyTo(cv::Mat(depth, cv::Rect(i*imageWidth, 0, imageWidth, imageHeight)));
+		}
+		else
+		{
+			ROS_ERROR("Some Depth images are not the same type!");
+			return false;
 		}
 
 		cameraModels.push_back(rtabmap_ros::cameraModelFromROS(cameraInfoMsgs[i], localTransform));
@@ -1283,10 +1224,7 @@ bool convertStereoMsg(
 		rightImageMsg->encoding.compare(sensor_msgs::image_encodings::BGR8) == 0 ||
 		rightImageMsg->encoding.compare(sensor_msgs::image_encodings::RGB8) == 0))
 	{
-		ROS_ERROR("Input type must be image=mono8,mono16,rgb8,bgr8,bgra8,rgba8");
-		ROS_ERROR("Input type must be image=mono8,mono16,rgb8,bgr8,bgra8,rgba8 Current left=%s and right=%s",
-				leftImageMsg->encoding.c_str(),
-				rightImageMsg->encoding.c_str());
+		ROS_ERROR("Input type must be image=mono8,mono16,rgb8,bgr8");
 		return false;
 	}
 
